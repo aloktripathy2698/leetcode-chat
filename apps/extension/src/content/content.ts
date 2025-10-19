@@ -43,7 +43,7 @@ function extractProblemInfo(): ProblemInfo | null {
     
     // URL and problem number
     const url = window.location.href;
-    const problemNumber = url.match(/\/problems\/([^\/]+)/)?.[1] || '';
+    const problemNumber = url.match(/\/problems\/([^/]+)/)?.[1] || '';
     
     return {
       title,
@@ -67,8 +67,8 @@ async function saveProblemInfo(): Promise<void> {
   if (problemInfo) {
     await chrome.storage.local.set({ currentProblem: problemInfo });
     console.log('Problem info saved:', problemInfo.title);
-    
-    chrome.runtime.sendMessage({
+
+    void chrome.runtime.sendMessage({
       action: 'problemDetected',
       problem: problemInfo
     });
@@ -76,7 +76,7 @@ async function saveProblemInfo(): Promise<void> {
 }
 
 // Listen for messages
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request: { action?: string }, _sender, sendResponse) => {
   if (request.action === 'getProblemInfo') {
     const problemInfo = extractProblemInfo();
     sendResponse({ problem: problemInfo });
@@ -91,12 +91,16 @@ new MutationObserver(() => {
   if (url !== lastUrl) {
     lastUrl = url;
     if (url.includes('/problems/')) {
-      setTimeout(saveProblemInfo, 1000);
+      setTimeout(() => {
+        void saveProblemInfo();
+      }, 1000);
     }
   }
 }).observe(document, { subtree: true, childList: true });
 
 // Initial extraction
 if (window.location.href.includes('/problems/')) {
-  setTimeout(saveProblemInfo, 1000);
+  setTimeout(() => {
+    void saveProblemInfo();
+  }, 1000);
 }

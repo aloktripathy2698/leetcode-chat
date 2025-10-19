@@ -113,7 +113,9 @@ const Settings = () => {
             <div className="mt-6 flex flex-wrap gap-3">
               <button
                 type="button"
-                onClick={handleSave}
+                onClick={() => {
+                  void handleSave();
+                }}
                 className="inline-flex items-center gap-2 rounded-xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white shadow-md shadow-orange-500/30 transition hover:bg-orange-500/90"
               >
                 <Save className="h-4 w-4" /> Save settings

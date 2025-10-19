@@ -10,12 +10,12 @@ export const DEFAULT_BACKEND_URL = 'http://localhost:8000/api/v1';
 export const readBackendUrl = async (): Promise<string | null> => {
   if (isChromeStorageAvailable()) {
     return new Promise((resolve) => {
-      chrome.storage.sync.get([STORAGE_KEYS.backendUrl], (result) => {
+      chrome.storage.sync.get([STORAGE_KEYS.backendUrl], (result: Record<string, unknown>) => {
         if (chrome.runtime.lastError) {
           resolve(null);
           return;
         }
-        const value = result[STORAGE_KEYS.backendUrl];
+        const value = result[STORAGE_KEYS.backendUrl] as unknown;
         resolve(typeof value === 'string' && value.trim() ? value.trim() : null);
       });
     });
