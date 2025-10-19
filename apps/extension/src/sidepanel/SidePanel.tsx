@@ -1,17 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Message, Problem, ProblemScrapeResponse } from '../types';
 
-const GEMINI_MODEL = 'gemini-2.5-flash';
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1/models/${GEMINI_MODEL}:generateContent`;
+import { checkBackendHealth, ingestProblem, sendChatRequest } from '../lib/api/client';
+import { DEFAULT_BACKEND_URL, readBackendUrl } from '../lib/storage';
+import type {
+  ChatHistoryMessage,
+  Message,
+  Problem,
+  ProblemScrapeResponse,
+  SourceDocument,
+} from '../types';
 
 const buildGreeting = (title: string): Message => ({
   role: 'assistant',
-  content: `I'm ready to help with “${title}”. Ask anything about the problem or describe what feels unclear.`,
+  content: `Ready to explore “${title}”. Ask me anything about the problem, constraints, or solution strategy.`,
   timestamp: Date.now(),
 });
 
-const hasChromeRuntime = () =>
-  typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined';
+const hasChromeRuntime = () => typeof chrome !== 'undefined' && typeof chrome.runtime !== 'undefined';
 
 const openSettingsPage = () => {
   if (typeof chrome !== 'undefined' && chrome.runtime?.openOptionsPage) {
@@ -20,23 +25,6 @@ const openSettingsPage = () => {
   }
   window.open('/settings.html', '_blank', 'noopener');
 };
-
-const fetchApiKey = (): Promise<string | null> =>
-  new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage?.sync) {
-      resolve(null);
-      return;
-    }
-
-    chrome.storage.sync.get(['apiKey'], (result) => {
-      if (chrome.runtime.lastError) {
-        resolve(null);
-        return;
-      }
-      const value = typeof result.apiKey === 'string' ? result.apiKey.trim() : '';
-      resolve(value || null);
-    });
-  });
 
 const requestActiveProblem = (): Promise<Problem> =>
   new Promise((resolve, reject) => {
@@ -60,55 +48,47 @@ const requestActiveProblem = (): Promise<Problem> =>
     });
   });
 
-const formatProblemContext = (problem: Problem) => {
-  const constraints = problem.constraints ? `\nConstraints:\n${problem.constraints}` : '';
-  const examples = problem.examples.length > 0 ? `\nExamples:\n${problem.examples.join('\n\n')}` : '';
-  return `Problem: ${problem.title} (#${problem.problemNumber})\nDifficulty: ${problem.difficulty}\n\nDescription:\n${problem.description}${constraints}${examples}`;
-};
-
-const extractGeminiText = (payload: unknown): string | null => {
-  if (!payload || typeof payload !== 'object') {
-    return null;
-  }
-
-  const candidate = (payload as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> }).candidates?.[0];
-  if (!candidate?.content?.parts) {
-    return null;
-  }
-  const combined = candidate.content.parts
-    .map((part) => (part?.text ?? '').trim())
-    .filter(Boolean)
-    .join('\n\n');
-  return combined || null;
-};
-
 const SidePanel = () => {
   const [problem, setProblem] = useState<Problem | null>(null);
   const [problemStatus, setProblemStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [problemError, setProblemError] = useState<string | null>(null);
 
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [apiKeyStatus, setApiKeyStatus] = useState<'loading' | 'ready' | 'missing'>('loading');
+  const [backendStatus, setBackendStatus] = useState<'loading' | 'ready' | 'error' | 'missing'>('loading');
+  const [backendMessage, setBackendMessage] = useState<string | null>(null);
+
+  const [ingestStatus, setIngestStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  const [latestSummary, setLatestSummary] = useState<string | null>(null);
+  const [sources, setSources] = useState<SourceDocument[]>([]);
 
   const hasValidSetup = useMemo(
-    () => Boolean(problem && apiKeyStatus === 'ready' && apiKey),
-    [problem, apiKeyStatus, apiKey],
+    () => Boolean(problem && backendStatus === 'ready'),
+    [problem, backendStatus],
   );
 
   useEffect(() => {
     const initialise = async () => {
-      const key = await fetchApiKey();
-      if (key) {
-        setApiKeyStatus('ready');
-        setApiKey(key);
+      const storedUrl = await readBackendUrl();
+      const reachable = await checkBackendHealth();
+
+      if (storedUrl) {
+        setBackendStatus(reachable ? 'ready' : 'error');
+        setBackendMessage(
+          reachable
+            ? `Connected to ${storedUrl}`
+            : `Configured backend (${storedUrl}) is not reachable. Start the Docker stack or adjust the URL in Settings.`,
+        );
       } else {
-        setApiKeyStatus('missing');
-        setApiKey(null);
+        setBackendStatus(reachable ? 'ready' : 'missing');
+        setBackendMessage(
+          reachable
+            ? `Using default backend at ${DEFAULT_BACKEND_URL}.`
+            : 'No backend URL saved. Open Settings to configure your FastAPI endpoint.',
+        );
       }
 
       try {
@@ -130,11 +110,14 @@ const SidePanel = () => {
       return;
     }
     setMessages([buildGreeting(problem.title)]);
+    setLatestSummary(null);
+    setSources([]);
   }, [problem]);
 
   const refreshProblem = useCallback(async () => {
     setProblemStatus('loading');
     setProblemError(null);
+    setIngestStatus('idle');
     try {
       const activeProblem = await requestActiveProblem();
       setProblem(activeProblem);
@@ -163,37 +146,33 @@ const SidePanel = () => {
     };
   }, [refreshProblem]);
 
-  const ensureApiKey = async () => {
-    if (apiKeyStatus === 'loading') {
-      const key = await fetchApiKey();
-      if (key) {
-        setApiKeyStatus('ready');
-        setApiKey(key);
-        return key;
-      }
-      setApiKeyStatus('missing');
-      return null;
+  useEffect(() => {
+    if (!problem || backendStatus !== 'ready') {
+      return;
     }
-    if (apiKeyStatus === 'ready' && apiKey) {
-      return apiKey;
-    }
-    return null;
-  };
+
+    setIngestStatus('syncing');
+    setChatError(null);
+
+    ingestProblem(problem)
+      .then(() => {
+        setIngestStatus('synced');
+      })
+      .catch((error) => {
+        setIngestStatus('error');
+        setChatError((error as Error).message);
+      });
+  }, [problem, backendStatus]);
 
   const handleSend = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const question = input.trim();
-    if (!question || !problem) {
+    if (!question || !problem || backendStatus !== 'ready') {
       return;
     }
+
     setInput('');
     setChatError(null);
-
-    const key = await ensureApiKey();
-    if (!key) {
-      setChatError('Gemini API key missing. Save it in Settings.');
-      return;
-    }
 
     const userMessage: Message = {
       role: 'user',
@@ -203,47 +182,38 @@ const SidePanel = () => {
     setMessages((prev) => [...prev, userMessage]);
     setIsThinking(true);
 
-    try {
-      const conversation = [...messages, userMessage];
-      const formattedConversation = conversation
-        .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content}`)
-        .join('\n');
-      const prompt = `${formatProblemContext(problem)}\n\nConversation so far:\n${formattedConversation}\nAssistant:`;
+    const history: ChatHistoryMessage[] = [...messages, userMessage].map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
 
-      const response = await fetch(`${GEMINI_ENDPOINT}?key=${key}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              role: 'user',
-              parts: [{ text: prompt }],
-            },
-          ],
-        }),
+    try {
+      const response = await sendChatRequest({
+        question,
+        problem: {
+          slug: problem.slug,
+          title: problem.title,
+          difficulty: problem.difficulty,
+          description: problem.description,
+          url: problem.url,
+        },
+        history,
       });
 
-      if (!response.ok) {
-        const errorBody: unknown = await response.json().catch(() => null);
-        const message =
-          (errorBody as { error?: { message?: string } })?.error?.message ?? `Gemini error (${response.status})`;
-        throw new Error(message);
-      }
-
-      const payload: unknown = await response.json();
-      const answer = extractGeminiText(payload);
-      if (!answer) {
-        throw new Error('Gemini returned an empty response.');
+      if (!response.success) {
+        throw new Error(response.error ?? 'Backend returned an unsuccessful response.');
       }
 
       const assistantMessage: Message = {
         role: 'assistant',
-        content: answer,
+        content: response.answer ?? 'No answer returned by the backend.',
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, assistantMessage]);
+      setLatestSummary(response.summary ?? null);
+      setSources(response.sources ?? []);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unexpected error while contacting Gemini.';
+      const message = error instanceof Error ? error.message : 'Unexpected error while contacting the backend.';
       setChatError(message);
     } finally {
       setIsThinking(false);
@@ -257,7 +227,7 @@ const SidePanel = () => {
           <p className="text-xs uppercase tracking-widest text-white/70">LeetCode Assistant</p>
           <h1 className="mt-1 text-2xl font-semibold">Problem workspace</h1>
           <p className="mt-1 text-sm text-white/80">
-            Ask focused questions about the problem you have open on LeetCode and get guidance from Gemini.
+            Ask focused questions about the problem you have open on LeetCode and get guidance powered by your FastAPI backend.
           </p>
           <div className="mt-4 flex flex-wrap gap-2 text-xs">
             <span
@@ -273,15 +243,40 @@ const SidePanel = () => {
             </span>
             <span
               className={`rounded-full px-3 py-1 font-semibold ${
-                apiKeyStatus === 'ready'
+                backendStatus === 'ready'
                   ? 'bg-emerald-500/20 text-emerald-100'
-                  : apiKeyStatus === 'loading'
+                  : backendStatus === 'loading'
                     ? 'bg-slate-500/20 text-slate-200'
-                    : 'bg-amber-500/30 text-amber-100'
+                    : backendStatus === 'missing'
+                      ? 'bg-amber-500/30 text-amber-100'
+                      : 'bg-rose-500/30 text-rose-100'
               }`}
             >
-              {apiKeyStatus === 'ready' ? 'Gemini key loaded' : apiKeyStatus === 'loading' ? 'Checking Gemini key…' : 'Gemini key missing'}
+              {backendStatus === 'ready'
+                ? 'Backend reachable'
+                : backendStatus === 'loading'
+                  ? 'Checking backend…'
+                  : backendStatus === 'missing'
+                    ? 'Backend not configured'
+                    : 'Backend unreachable'}
             </span>
+            {ingestStatus !== 'idle' && (
+              <span
+                className={`rounded-full px-3 py-1 font-semibold ${
+                  ingestStatus === 'synced'
+                    ? 'bg-emerald-500/20 text-emerald-100'
+                    : ingestStatus === 'syncing'
+                      ? 'bg-slate-500/20 text-slate-200'
+                      : 'bg-rose-500/30 text-rose-100'
+                }`}
+              >
+                {ingestStatus === 'synced'
+                  ? 'Context synced'
+                  : ingestStatus === 'syncing'
+                    ? 'Syncing context…'
+                    : 'Context sync failed'}
+              </span>
+            )}
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             <button
@@ -306,9 +301,9 @@ const SidePanel = () => {
               {problemError}
             </p>
           )}
-          {apiKeyStatus === 'missing' && (
-            <p className="mt-3 rounded-lg border border-amber-300/40 bg-amber-500/20 px-3 py-2 text-xs text-amber-100">
-              Save a Gemini API key in the Settings page to enable answers.
+          {backendMessage && (
+            <p className="mt-3 rounded-lg border border-white/20 bg-black/20 px-3 py-2 text-xs text-white/80">
+              {backendMessage}
             </p>
           )}
         </header>
@@ -320,7 +315,9 @@ const SidePanel = () => {
                 <div>
                   <p className="text-xs uppercase tracking-widest text-orange-200/70">Current problem</p>
                   <h2 className="mt-1 text-xl font-semibold text-white">{problem.title}</h2>
-                  <p className="text-xs text-slate-300/70">#{problem.problemNumber}</p>
+                  <p className="text-xs text-slate-300/70">
+                    #{problem.problemNumber} · {problem.difficulty}
+                  </p>
                 </div>
                 <span
                   className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${
@@ -374,7 +371,7 @@ const SidePanel = () => {
                   >
                     <p className="whitespace-pre-wrap">{message.content}</p>
                     <span className="mt-2 block text-right text-[10px] uppercase tracking-widest text-white/60">
-                      {message.role === 'user' ? 'You' : 'Gemini'} •{' '}
+                      {message.role === 'user' ? 'You' : 'Assistant'} •{' '}
                       {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
@@ -384,7 +381,7 @@ const SidePanel = () => {
                 <div className="flex justify-start">
                   <div className="flex items-center gap-2 rounded-2xl bg-black/40 px-4 py-3 text-xs text-slate-200">
                     <span className="h-2 w-2 animate-pulse rounded-full bg-orange-300" />
-                    Gemini is thinking…
+                    Assistant is thinking…
                   </div>
                 </div>
               )}
@@ -405,9 +402,11 @@ const SidePanel = () => {
                   value={input}
                   onChange={(event) => setInput(event.target.value)}
                   placeholder={
-                    problemStatus === 'ready'
-                      ? `Ask about ${problem?.title ?? 'the problem'}…`
-                      : 'Problem not detected yet.'
+                    backendStatus === 'ready'
+                      ? problemStatus === 'ready'
+                        ? `Ask about ${problem?.title ?? 'the problem'}…`
+                        : 'Problem not detected yet.'
+                      : 'Backend unavailable. Configure it in Settings.'
                   }
                   className="h-20 flex-1 resize-none rounded-xl border-0 bg-transparent text-sm text-slate-100 placeholder:text-slate-400 focus:outline-none"
                   spellCheck
@@ -428,6 +427,31 @@ const SidePanel = () => {
               )}
             </form>
           </section>
+
+          {(latestSummary || sources.length > 0) && (
+            <section className="space-y-4 rounded-2xl border border-white/10 bg-white/5 p-5 shadow-lg">
+              {latestSummary && (
+                <div>
+                  <h3 className="text-sm font-semibold uppercase tracking-widest text-orange-200/80">Key takeaways</h3>
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-slate-200/90">{latestSummary}</p>
+                </div>
+              )}
+
+              {sources.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-semibold uppercase tracking-widest text-orange-200/80">Context used</h3>
+                  <ul className="mt-2 space-y-2 text-sm text-slate-200/90">
+                    {sources.map((source, index) => (
+                      <li key={`${source.title}-${index}`} className="rounded-xl border border-white/10 bg-black/40 p-3">
+                        <p className="font-semibold text-white">{source.title}</p>
+                        <p className="mt-1 text-xs text-slate-300/80">{source.snippet}</p>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
         </main>
       </div>
     </div>

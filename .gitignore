@@ -1,4 +1,16 @@
-node_modules
-dist
+# Node / Frontend
+node_modules/
+apps/extension/node_modules/
+apps/extension/dist/
+
+# Python / Backend
+__pycache__/
+*.py[cod]
+
+# Environment files
+.env
+apps/api/.env
+
+# IDE
 .DS_Store
-npm-debug.log*
+.vscode/

@@ -235,6 +235,7 @@ const scrapeProblemInPage = async (): Promise<Problem | null> => {
       examples,
       constraints,
       url: window.location.href,
+      slug: candidateSlug || slug,
       problemNumber: String(problemNumber),
     };
   };
@@ -357,6 +358,7 @@ const scrapeProblemInPage = async (): Promise<Problem | null> => {
       examples,
       constraints,
       url: window.location.href,
+      slug: toSlug(title),
       problemNumber: String(problemNumber),
     };
   };
@@ -439,6 +441,7 @@ const scrapeProblemInPage = async (): Promise<Problem | null> => {
     examples,
     constraints,
     url: window.location.href,
+    slug,
     problemNumber: String(
       (typeof graphQuestion.questionFrontendId === 'string'
         ? graphQuestion.questionFrontendId

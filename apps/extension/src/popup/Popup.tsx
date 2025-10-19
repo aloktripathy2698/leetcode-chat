@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react';
+
+import { checkBackendHealth } from '../lib/api/client';
+import { DEFAULT_BACKEND_URL, readBackendUrl } from '../lib/storage';
 import type { Problem, ProblemScrapeResponse } from '../types';
 
 const hasChromeRuntime = () =>
@@ -25,33 +28,36 @@ const requestProblem = (): Promise<Problem> =>
     });
   });
 
-const fetchApiKeyStatus = (): Promise<'present' | 'missing'> =>
-  new Promise((resolve) => {
-    if (typeof chrome === 'undefined' || !chrome.storage?.sync) {
-      resolve('missing');
-      return;
-    }
-    chrome.storage.sync.get(['apiKey'], (result) => {
-      if (chrome.runtime.lastError) {
-        resolve('missing');
-        return;
-      }
-      const key = typeof result.apiKey === 'string' ? result.apiKey.trim() : '';
-      resolve(key ? 'present' : 'missing');
-    });
-  });
+type BackendStatus = 'loading' | 'connected' | 'configured' | 'missing';
 
 const Popup = () => {
   const [problem, setProblem] = useState<Problem | null>(null);
   const [problemStatus, setProblemStatus] = useState<'loading' | 'error' | 'ready'>('loading');
   const [problemError, setProblemError] = useState<string | null>(null);
-  const [apiKeyStatus, setApiKeyStatus] = useState<'loading' | 'present' | 'missing'>('loading');
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>('loading');
+  const [backendStatusMessage, setBackendStatusMessage] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const hydrate = async () => {
-      const keyStatus = await fetchApiKeyStatus();
-      setApiKeyStatus(keyStatus);
+      const storedUrl = await readBackendUrl();
+      const reachable = await checkBackendHealth();
+
+      if (storedUrl) {
+        setBackendStatus(reachable ? 'connected' : 'configured');
+        setBackendStatusMessage(
+          reachable
+            ? `Connected to ${storedUrl}`
+            : `Configured backend (${storedUrl}) is not reachable. Start the services or update the URL in Settings.`,
+        );
+      } else {
+        setBackendStatus(reachable ? 'connected' : 'missing');
+        setBackendStatusMessage(
+          reachable
+            ? `Using default backend at ${DEFAULT_BACKEND_URL}.`
+            : 'No backend URL saved. Open Settings to configure one or start the local Docker stack.',
+        );
+      }
 
       try {
         const activeProblem = await requestProblem();
@@ -93,7 +99,7 @@ const Popup = () => {
           <p className="text-xs uppercase tracking-wide text-orange-300">LeetCode Assistant</p>
           <h1 className="mt-1 text-xl font-semibold text-white">Control Center</h1>
           <p className="mt-2 text-sm text-slate-200/80">
-            Launch the side panel, refresh the detected problem, or jump to settings to update your Gemini key.
+            Launch the side panel, refresh the detected problem, or jump to settings to adjust backend connectivity.
           </p>
         </header>
 
@@ -143,18 +149,20 @@ const Popup = () => {
             onClick={() => chrome.runtime.openOptionsPage?.()}
             className="w-full rounded-xl border border-white/20 px-4 py-3 text-sm font-semibold text-orange-200 transition hover:border-orange-400/80 hover:text-orange-50"
           >
-            Configure Gemini API key
+            Configure backend settings
           </button>
         </section>
 
         <section className="space-y-2 rounded-2xl border border-white/10 bg-white/5 p-4">
-          <h2 className="text-sm font-semibold text-white">Gemini status</h2>
+          <h2 className="text-sm font-semibold text-white">Backend status</h2>
           <p className="text-xs text-slate-200/80">
-            {apiKeyStatus === 'loading'
-              ? 'Checking for a stored API key…'
-              : apiKeyStatus === 'present'
-                ? 'Gemini key found. You can start asking questions in the side panel.'
-                : 'No Gemini key saved. Open the settings page to store one.'}
+            {backendStatus === 'loading'
+              ? 'Checking backend connectivity…'
+              : backendStatus === 'connected'
+                ? backendStatusMessage ?? 'Backend reachable and ready.'
+                : backendStatus === 'configured'
+                  ? backendStatusMessage ?? 'Backend URL saved but currently unreachable.'
+                  : backendStatusMessage ?? 'No backend URL saved yet.'}
           </p>
         </section>
 
