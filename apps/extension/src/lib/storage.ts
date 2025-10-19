@@ -15,7 +15,7 @@ export const readBackendUrl = async (): Promise<string | null> => {
           resolve(null);
           return;
         }
-        const value = result[STORAGE_KEYS.backendUrl] as unknown;
+        const value = result[STORAGE_KEYS.backendUrl];
         resolve(typeof value === 'string' && value.trim() ? value.trim() : null);
       });
     });
