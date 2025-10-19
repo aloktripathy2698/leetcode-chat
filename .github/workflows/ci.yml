@@ -36,6 +36,9 @@ jobs:
       - name: Compile backend sources
         run: python -m compileall apps/api/app
 
+      - name: Run backend tests
+        run: pytest apps/api/tests
+
   extension:
     name: Chrome Extension (React)
     runs-on: ubuntu-latest
