@@ -119,6 +119,10 @@ From repository root:
 
 Backend container uses live-reload via Uvicorn when `/app/app` changes.
 
+### Continuous Integration
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push/PR to `main`. The workflow builds the FastAPI service (pip install + `python -m compileall`) and verifies the Chrome extension (`npm ci`, lint, and build). Keep new dependencies declared in `apps/api/requirements.txt` or `apps/extension/package.json` so the pipeline succeeds.
+
 ---
 
 ## 🧠 RAG Pipeline Overview
