@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { checkBackendHealth, ingestProblem, sendChatRequest } from '../lib/api/client';
+import { checkBackendHealth, ingestProblem, streamChatRequest } from '../lib/api/client';
 import { DEFAULT_BACKEND_URL, readBackendUrl } from '../lib/storage';
 import type {
   ChatHistoryMessage,
@@ -173,13 +173,22 @@ const SidePanel = () => {
 
     setInput('');
     setChatError(null);
+    setLatestSummary(null);
+    setSources([]);
 
     const userMessage: Message = {
       role: 'user',
       content: question,
       timestamp: Date.now(),
     };
-    setMessages((prev) => [...prev, userMessage]);
+    const assistantMessage: Message = {
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now() + 1,
+    };
+    const assistantId = assistantMessage.timestamp;
+
+    setMessages((prev) => [...prev, userMessage, assistantMessage]);
     setIsThinking(true);
 
     const history: ChatHistoryMessage[] = [...messages, userMessage].map((message) => ({
@@ -188,33 +197,88 @@ const SidePanel = () => {
     }));
 
     try {
-      const response = await sendChatRequest({
-        question,
-        problem: {
-          slug: problem.slug,
-          title: problem.title,
-          difficulty: problem.difficulty,
-          description: problem.description,
-          url: problem.url,
+      await streamChatRequest(
+        {
+          question,
+          problem: {
+            slug: problem.slug,
+            title: problem.title,
+            difficulty: problem.difficulty,
+            description: problem.description,
+            url: problem.url,
+          },
+          history,
         },
-        history,
-      });
-
-      if (!response.success) {
-        throw new Error(response.error ?? 'Backend returned an unsuccessful response.');
-      }
-
-      const assistantMessage: Message = {
-        role: 'assistant',
-        content: response.answer ?? 'No answer returned by the backend.',
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-      setLatestSummary(response.summary ?? null);
-      setSources(response.sources ?? []);
+        (streamEvent) => {
+          switch (streamEvent.type) {
+            case 'sources':
+              setSources(streamEvent.sources);
+              break;
+            case 'token':
+              setMessages((prev) =>
+                prev.map((message) =>
+                  message.timestamp === assistantId
+                    ? { ...message, content: `${message.content}${streamEvent.token}` }
+                    : message,
+                ),
+              );
+              break;
+            case 'summary':
+              setLatestSummary(streamEvent.summary);
+              break;
+            case 'end':
+              setMessages((prev) =>
+                prev.map((message) =>
+                  message.timestamp === assistantId
+                    ? { ...message, content: streamEvent.payload.answer }
+                    : message,
+                ),
+              );
+              setLatestSummary(streamEvent.payload.summary);
+              setSources(streamEvent.payload.sources);
+              setIsThinking(false);
+              break;
+            case 'cached':
+              setMessages((prev) =>
+                prev.map((message) =>
+                  message.timestamp === assistantId
+                    ? { ...message, content: streamEvent.payload.answer }
+                    : message,
+                ),
+              );
+              setLatestSummary(streamEvent.payload.summary);
+              setSources(streamEvent.payload.sources);
+              setIsThinking(false);
+              break;
+            case 'error':
+              setChatError(streamEvent.error);
+              setMessages((prev) =>
+                prev.map((message) =>
+                  message.timestamp === assistantId
+                    ? {
+                        ...message,
+                        content: 'Assistant encountered an error. Please try again.',
+                      }
+                    : message,
+                ),
+              );
+              setIsThinking(false);
+              break;
+            default:
+              break;
+          }
+        },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unexpected error while contacting the backend.';
       setChatError(message);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.timestamp === assistantId
+            ? { ...msg, content: 'Assistant failed to respond. Please try again.' }
+            : msg,
+        ),
+      );
     } finally {
       setIsThinking(false);
     }

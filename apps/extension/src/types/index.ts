@@ -24,11 +24,19 @@ export interface SourceDocument {
 
 export interface ChatResponse {
   success: boolean;
-  answer?: string;
-  summary?: string;
-  sources?: SourceDocument[];
+  answer: string;
+  summary: string;
+  sources: SourceDocument[];
   error?: string;
 }
+
+export type ChatStreamEvent =
+  | { type: 'sources'; sources: SourceDocument[] }
+  | { type: 'token'; token: string }
+  | { type: 'summary'; summary: string }
+  | { type: 'end'; payload: ChatResponse }
+  | { type: 'cached'; payload: ChatResponse }
+  | { type: 'error'; error: string };
 
 export interface ChatHistoryMessage {
   role: Message['role'];

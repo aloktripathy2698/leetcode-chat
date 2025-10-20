@@ -32,7 +32,10 @@ class Settings(BaseSettings):
     cache_ttl_seconds: int = Field(default=300, validation_alias="CACHE_TTL_SECONDS")
     sqlalchemy_echo: bool = Field(default=False, validation_alias="SQLALCHEMY_ECHO")
 
-    cors_origins_raw: str = Field(default="", validation_alias="BACKEND_CORS_ORIGINS")
+    cors_origins_raw: str = Field(
+        default="http://localhost:5173,chrome-extension://*",
+        validation_alias="BACKEND_CORS_ORIGINS",
+    )
 
     @cached_property
     def _cors_entries(self) -> list[str]:
