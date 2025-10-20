@@ -9,6 +9,8 @@ Productivity assistant for LeetCode that lives directly inside the browser. A Ch
 - **In-browser coaching** – context-aware chat panel that understands the LeetCode problem you currently have open.
 - **Automatic problem scraping** – DOM + GraphQL scrapers populate description, constraints, and examples with millisecond latency.
 - **RAG pipeline** – LangGraph orchestrates pgvector similarity search, Redis caching, and an LLM prompt that returns JSON summaries.
+- **Streaming answers + syntax highlighting** – responses arrive token-by-token and render rich Markdown with Prism-powered code blocks.
+- **Theme toggle built in** – switch between light and dark modes on the fly; the extension remembers your preference.
 - **Modular monorepo** – separate `apps/extension` and `apps/api` packages with shared types and reproducible builds.
 - **Developer tooling** – Docker Compose stack, hot-reload Uvicorn server, npm proxy scripts, and detailed setup docs.
 
@@ -137,6 +139,16 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push/PR to `main`. The
 3. **Retrieval** – when a chat question arrives, LangGraph queries pgvector for top-k chunks, enriched with metadata.  
 4. **LLM response** – LangChain `ChatOpenAI` consumes a structured prompt and returns JSON containing `answer` + `summary`.  
 5. **Caching** – Redis stores chat responses keyed by slug + normalized conversation history to avoid repeated LLM calls.
+
+---
+
+## 📸 Screenshots
+
+| Dark mode side panel | Light mode side panel | In-page integration |
+|----------------------|-----------------------|---------------------|
+| ![Dark mode panel](docs/images/sidepanel-dark.png) | ![Light mode panel](docs/images/sidepanel-light.png) | ![Assistant alongside LeetCode UI](docs/images/sidepanel-page.png) |
+
+> Place the screenshots above (or your own variants) in `docs/images/` to keep the README visuals in sync with the latest UI.
 
 ---
 
