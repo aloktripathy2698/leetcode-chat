@@ -142,16 +142,6 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push/PR to `main`. The
 
 ---
 
-## 📸 Screenshots
-
-| Dark mode side panel | Light mode side panel | In-page integration |
-|----------------------|-----------------------|---------------------|
-| ![Dark mode panel](docs/images/sidepanel-dark.png) | ![Light mode panel](docs/images/sidepanel-light.png) | ![Assistant alongside LeetCode UI](docs/images/sidepanel-page.png) |
-
-> Place the screenshots above (or your own variants) in `docs/images/` to keep the README visuals in sync with the latest UI.
-
----
-
 ## 🧪 API Reference
 
 - `GET /api/v1/health` – readiness probe
