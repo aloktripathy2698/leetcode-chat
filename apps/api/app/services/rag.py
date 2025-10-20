@@ -26,13 +26,13 @@ class RAGPipeline:
         self._retriever = retriever
         self._cache = cache
         self._answer_llm = ChatOpenAI(
-            temperature=0.2,
+            temperature=0.0,
             model=settings.openai_model,
             openai_api_key=settings.openai_api_key,
             streaming=True,
         )
         self._summary_llm = ChatOpenAI(
-            temperature=0.2,
+            temperature=0.0,
             model=settings.openai_model,
             openai_api_key=settings.openai_api_key,
         )
@@ -43,12 +43,12 @@ class RAGPipeline:
                     textwrap.dedent(
                         """
                         You are an elite software engineering mentor helping users solve LeetCode problems.
-                        Use the retrieved contextual snippets to craft explanations that are:
-                        - precise, technically accurate, and aligned with the problem's constraints
-                        - structured with clear steps, highlighting trade-offs when relevant
-                        - encouraging, yet honest about complexities
-
-                        Respond with detailed guidance in Markdown. Do not wrap your response in JSON.
+                        Always follow the learner's most recent instructions exactly.
+                        Use the retrieved contextual snippets only when they are relevant to the question.
+                        Keep responses sharply focused on the request — avoid restating the entire problem or adding unsolicited details.
+                        If the learner explicitly asks for code-only, respond with a single fenced code block in the requested language and no additional commentary.
+                        Otherwise, answer with concise Markdown that covers only what is necessary to address the question (step-by-step guidance, short clarifications, or targeted tips).
+                        Never invent information that is not supported by the retrieved context or the question.
                         """,
                     ).strip(),
                 ),

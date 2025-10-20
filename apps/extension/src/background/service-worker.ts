@@ -4,6 +4,18 @@ type ParsedProblem = Omit<Problem, 'timestamp'>;
 
 const SIDE_PANEL_PATH = 'sidepanel.html';
 
+const getPanelEnabledState = async (tabId: number): Promise<boolean | null> => {
+  if (!chrome.sidePanel?.getOptions) {
+    return null;
+  }
+  try {
+    const options = await chrome.sidePanel.getOptions({ tabId });
+    return Boolean(options?.enabled);
+  } catch {
+    return null;
+  }
+};
+
 const hasSidePanel = () =>
   typeof chrome !== 'undefined' &&
   Boolean(chrome.sidePanel?.open) &&
@@ -38,23 +50,28 @@ chrome.action.onClicked.addListener((tab) => {
   })();
 });
 
-const openSidePanelForCurrentTab = async (): Promise<{ success: boolean; error?: string }> => {
+const openSidePanelForCurrentTab = async (explicitTabId?: number): Promise<{ success: boolean; error?: string }> => {
   if (!hasSidePanel()) {
     return { success: false, error: 'Side panel API is not available in this Chrome version.' };
   }
 
-  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!activeTab?.id) {
+  let tabId = explicitTabId;
+  if (!tabId) {
+    const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = activeTab?.id;
+  }
+
+  if (!tabId) {
     return { success: false, error: 'No active tab to attach the side panel to.' };
   }
 
   try {
     await chrome.sidePanel.setOptions({
-      tabId: activeTab.id,
+      tabId,
       path: SIDE_PANEL_PATH,
       enabled: true,
     });
-    await chrome.sidePanel.open({ tabId: activeTab.id });
+    await chrome.sidePanel.open({ tabId });
     return { success: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to open side panel';
@@ -62,7 +79,31 @@ const openSidePanelForCurrentTab = async (): Promise<{ success: boolean; error?:
   }
 };
 
-chrome.runtime.onMessage.addListener((rawMessage: unknown, _sender, sendResponse) => {
+const toggleSidePanelForTab = async (tabId: number): Promise<{ success: boolean; state: 'opened' | 'closed'; error?: string }> => {
+  if (!hasSidePanel()) {
+    return { success: false, state: 'closed', error: 'Side panel API is not available in this Chrome version.' };
+  }
+
+  const currentState = await getPanelEnabledState(tabId);
+
+  if (currentState) {
+    try {
+      await chrome.sidePanel?.setOptions?.({ tabId, enabled: false });
+      return { success: true, state: 'closed' };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to close side panel';
+      return { success: false, state: 'closed', error: message };
+    }
+  }
+
+  const openResult = await openSidePanelForCurrentTab(tabId);
+  if (!openResult.success) {
+    return { success: false, state: 'closed', error: openResult.error };
+  }
+  return { success: true, state: 'opened' };
+};
+
+chrome.runtime.onMessage.addListener((rawMessage: unknown, sender, sendResponse) => {
   if (!rawMessage || typeof rawMessage !== 'object') {
     return;
   }
@@ -70,11 +111,31 @@ chrome.runtime.onMessage.addListener((rawMessage: unknown, _sender, sendResponse
   const message = rawMessage as { type?: string };
 
   if (message.type === 'OPEN_SIDE_PANEL') {
-    void openSidePanelForCurrentTab()
+    const senderTabId = sender?.tab?.id;
+    void openSidePanelForCurrentTab(senderTabId)
       .then(sendResponse)
       .catch((error) => {
         const messageText = error instanceof Error ? error.message : 'Unexpected error';
         sendResponse({ success: false, error: messageText });
+      });
+    return true;
+  }
+
+  if (message.type === 'TOGGLE_SIDE_PANEL') {
+    const senderTabId = sender?.tab?.id;
+    const tabIdPromise = senderTabId ? Promise.resolve(senderTabId) : chrome.tabs.query({ active: true, currentWindow: true }).then((tabs) => tabs[0]?.id ?? null);
+
+    void tabIdPromise
+      .then(async (tabId) => {
+        if (!tabId) {
+          return { success: false, state: 'closed', error: 'No active tab detected.' };
+        }
+        return toggleSidePanelForTab(tabId);
+      })
+      .then(sendResponse)
+      .catch((error) => {
+        const messageText = error instanceof Error ? error.message : 'Unexpected error';
+        sendResponse({ success: false, state: 'closed', error: messageText });
       });
     return true;
   }
